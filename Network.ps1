@@ -6,7 +6,7 @@ $ErrorActionPreference = "SilentlyContinue"
 
 # Self-elevate at the start of the script
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $scriptUrl = "https://raw.githubusercontent.com/user/repo/branch/script.ps1"
+    $scriptUrl = "ttps://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1"
     $tempFile = "$env:TEMP\$(New-Guid).ps1"
     Invoke-WebRequest -Uri $scriptUrl -OutFile $tempFile
     Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$tempFile`"" -Verb RunAs
