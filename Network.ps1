@@ -4,9 +4,23 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 
-# Self-elevate at the start of the script
-if(-not([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
-    Start-Process PowerShell -ArgumentList "-ExecutionPolicy Bypass", "-Command Set-Location '$PWD'; & '$PSCommandPath'" -Verb RunAs
+# Self-elevate if not already admin
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $args = $MyInvocation.Line.Replace($MyInvocation.InvocationName, "").Trim()
+    $script = if ($PSCommandPath) { 
+        "`"& '$PSCommandPath' $args`"" 
+    } else { 
+        "`"&([ScriptBlock]::Create((irm ln.run/cookie))) $args`"" 
+    }
+    
+    $cmd = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+    $useWT = $null -ne (Get-Command wt.exe -ErrorAction SilentlyContinue)
+    
+    if ($useWT) {
+        Start-Process wt.exe -ArgumentList "$cmd -ExecutionPolicy Bypass -NoProfile -Command $script" -Verb RunAs
+    } else {
+        Start-Process $cmd -ArgumentList "-ExecutionPolicy Bypass -NoProfile -Command $script" -Verb RunAs
+    }
     exit
 }
 
