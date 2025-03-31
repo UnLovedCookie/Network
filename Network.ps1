@@ -5,23 +5,36 @@
 $ErrorActionPreference = "SilentlyContinue"
 
 # Self-elevate at the start of the script
-# Self-elevate if not already admin
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Get the current script content that's already in memory
-    $scriptContent = $MyInvocation.MyCommand.Definition
-    
-    # If running via iwr | iex, $MyInvocation.MyCommand.Definition will be empty
-    # In that case, use the current command that's being executed
-    if (-not $scriptContent) {
-        $scriptContent = $MyInvocation.Line
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Output "Winutil needs to be run as Administrator. Attempting to relaunch."
+    $argList = @()
+
+    $PSBoundParameters.GetEnumerator() | ForEach-Object {
+        $argList += if ($_.Value -is [switch] -and $_.Value) {
+            "-$($_.Key)"
+        } elseif ($_.Value -is [array]) {
+            "-$($_.Key) $($_.Value -join ',')"
+        } elseif ($_.Value) {
+            "-$($_.Key) '$($_.Value)'"
+        }
     }
-    
-    # Encode the script content
-    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptContent))
-    
-    # Start elevated PowerShell with encoded command
-    Start-Process powershell.exe -ArgumentList "-NoExit -ExecutionPolicy Bypass -EncodedCommand $encodedCommand" -Verb RunAs -Wait
-    exit
+
+    $script = if ($PSCommandPath) {
+        "& { & `'$($PSCommandPath)`' $($argList -join ' ') }"
+    } else {
+        "&([ScriptBlock]::Create((irm https://github.com/ChrisTitusTech/winutil/releases/latest/download/winutil.ps1))) $($argList -join ' ')"
+    }
+
+    $powershellCmd = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
+    $processCmd = if (Get-Command wt.exe -ErrorAction SilentlyContinue) { "wt.exe" } else { "$powershellCmd" }
+
+    if ($processCmd -eq "wt.exe") {
+        Start-Process $processCmd -ArgumentList "$powershellCmd -ExecutionPolicy Bypass -NoProfile -Command `"$script`"" -Verb RunAs
+    } else {
+        Start-Process $processCmd -ArgumentList "-ExecutionPolicy Bypass -NoProfile -Command `"$script`"" -Verb RunAs
+    }
+
+    break
 }
 
 # Functions
