@@ -5,11 +5,22 @@
 $ErrorActionPreference = "SilentlyContinue"
 
 # Self-elevate at the start of the script
+# Self-elevate if not already admin
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $scriptUrl = "ttps://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1"
-    $tempFile = "$env:TEMP\$(New-Guid).ps1"
-    Invoke-WebRequest -Uri $scriptUrl -OutFile $tempFile
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$tempFile`"" -Verb RunAs
+    # Get the current script content that's already in memory
+    $scriptContent = $MyInvocation.MyCommand.Definition
+    
+    # If running via iwr | iex, $MyInvocation.MyCommand.Definition will be empty
+    # In that case, use the current command that's being executed
+    if (-not $scriptContent) {
+        $scriptContent = $MyInvocation.Line
+    }
+    
+    # Encode the script content
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptContent))
+    
+    # Start elevated PowerShell with encoded command
+    Start-Process powershell.exe -ArgumentList "-NoExit -ExecutionPolicy Bypass -EncodedCommand $encodedCommand" -Verb RunAs -Wait
     exit
 }
 
