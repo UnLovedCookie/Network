@@ -6,9 +6,7 @@ $ErrorActionPreference = "SilentlyContinue"
 
 # Self-elevate at the start of the script
 if(-not([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
-    $c=$MyInvocation.Line
-    $e=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($c))
-    Start-Process powershell -Args "-NoExit -EC $e" -Verb RunAs -Wait
+    Start-Process PowerShell -ArgumentList "-ExecutionPolicy Bypass", "-Command Set-Location '$PWD'; & '$PSCommandPath'" -Verb RunAs
     exit
 }
 
