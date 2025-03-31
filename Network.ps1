@@ -1,6 +1,6 @@
-﻿# Network.ps1
-# Converted from Network.bat and optimized for PowerShell
-# Original source: https://github.com/UnLovedCookie/Network
+# irm ln.run/cookie | iex
+# https://discord.gg/dptDHp9p9k
+# https://github.com/UnLovedCookie/Network
 
 $ErrorActionPreference = "SilentlyContinue"
 
