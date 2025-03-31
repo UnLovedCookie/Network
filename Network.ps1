@@ -4,7 +4,7 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 
-# Self-elevate if not already admin
+# Self-Elevate
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $args = $MyInvocation.Line.Replace($MyInvocation.InvocationName, "").Trim()
     $script = if ($PSCommandPath) { 
@@ -38,11 +38,13 @@ function Set-TCPSetting {
 }
 
 # User Input
+cls
 Write-Host "Connection Type:`n[1] Fiber (100+ mbps)`n[2] VDSL (20-100 mbps)`n[3] ADSL (20< mbps)"
 $ConnectionType = [int](Read-Host "Choose (1-3)")
-
+cls
 Write-Host "Optimize For:`n[1] Throughput (Speed)`n[2] Latency (Ping)"
 $OptimizeFor = [int](Read-Host "Choose (1-2)")
+cls
 
 # Reset Advanced Network Adapter Options
 Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Reset-NetAdapterAdvancedProperty -DisplayName '*' -NoRestart
@@ -578,10 +580,10 @@ $apps = @("csgo", "VALORANT-Win64-Shipping", "javaw", "FortniteClient-Win64-Ship
           "ModernWarfare", "r5apex", "Marvel-Win64-Shipping", "ExitLag")
 
 foreach ($app in $apps) {
-    Remove-NetQosPolicy -Name $app -PolicyStore PersistentStore -ErrorAction SilentlyContinue -Confirm:$false
+    Remove-NetQosPolicy -Name $app -ErrorAction SilentlyContinue -Confirm:$false
     Remove-NetQosPolicy -Name $app -PolicyStore ActiveStore -ErrorAction SilentlyContinue -Confirm:$false
-    New-NetQosPolicy -Name $app -AppPathNameMatchCondition "$app.exe" -DscpAction 46
-    New-NetQosPolicy -Name $app -AppPathNameMatchCondition "$app.exe" -DscpAction 46 -PolicyStore ActiveStore
+    New-NetQosPolicy -Name $app -AppPathNameMatchCondition "$app.exe" -DscpAction 46 | Out-Null
+    New-NetQosPolicy -Name $app -AppPathNameMatchCondition "$app.exe" -DscpAction 46 -PolicyStore ActiveStore | Out-Null
 }
 Write-Host "Optimize DSCP For Certain Applications"
 
