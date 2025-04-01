@@ -1,4 +1,5 @@
 # irm ln.run/cookie | iex
+# irm https://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1 | iex
 # https://discord.gg/dptDHp9p9k
 # https://github.com/UnLovedCookie/Network
 
@@ -10,7 +11,7 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
     $script = if ($PSCommandPath) { 
         "`"& '$PSCommandPath' $args`"" 
     } else { 
-        "`"&([ScriptBlock]::Create((irm ln.run/cookie))) $args`"" 
+        "`"&([ScriptBlock]::Create((irm https://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1))) $args`"" 
     }
     
     $cmd = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
