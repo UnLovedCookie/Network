@@ -28,7 +28,7 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 # Functions
 function Set-NICProperty {
     param([string]$Keyword, [string]$Value)
-    Get-NetAdapterAdvancedProperty -RegistryKeyword "*$Keyword" | 
+    Get-NetAdapterAdvancedProperty -RegistryKeyword "*$Keyword*" | 
     ForEach-Object { Set-NetAdapterAdvancedProperty -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart }
 }
 
@@ -44,17 +44,17 @@ Write-Host "Connection Type:`n[1] Fiber (100+ mbps)`n[2] VDSL (20-100 mbps)`n[3]
 $ConnectionType = [int](Read-Host "Choose (1-3)")
 cls
 Write-Host "Optimize For:`n[1] Throughput (Speed)`n[2] Latency (Ping)"
+Write-Host "Disables LSO, Flow Control, Interrupt Moderation, and sets AutoTuning to highly restricted"
 $OptimizeFor = [int](Read-Host "Choose (1-2)")
 cls
 
 # Reset Advanced Network Adapter Options
-Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Reset-NetAdapterAdvancedProperty -DisplayName '*' -NoRestart
+Reset-NetAdapterAdvancedProperty -DisplayName '*' -NoRestart
 Write-Host "Reset Advanced Network Adapter Options"
 
 # Reset TCP/IP Settings
 @(
     "netsh int tcp reset",
-    "netsh winhttp reset proxy",
     "netsh winsock reset",
     "netsh int ip reset",
     "netsh int ipv4 reset",
@@ -70,16 +70,11 @@ $DefaultTTL = switch ($ConnectionType) {
     default { 128 }
 }
 Set-TCPSetting "DefaultTTL" $DefaultTTL
-netsh int ipv4 set glob defaultcurhoplimit=$DefaultTTL | Out-Null
-netsh int ipv6 set glob defaultcurhoplimit=$DefaultTTL | Out-Null
+Get-NetIPInterface | Set-NetIPInterface -CurrentHopLimit $DefaultTTL
 Write-Host "Set Time To Live (TTL) To $DefaultTTL"
 
 # MTU Optimization
-$connectedInterfaces = netsh int show int | Select-String -Pattern "connected"
-foreach ($interface in $connectedInterfaces) {
-    $interfaceName = $interface -replace '.*\s{2,}', ''
-    netsh interface ipv4 set subinterface "$interfaceName" mtu=1500 store=persistent *>$null
-}
+Get-NetIPInterface | Set-NetIPInterface -NlMtuBytes 1500 -AddressFamily IPv4
 
 $mtu = 1501
 do {
@@ -100,11 +95,7 @@ if ($fragmented) {
 }
 
 if ($mtu -ge 1472) { $mtu = 1500 }
-
-foreach ($interface in $connectedInterfaces) {
-    $interfaceName = $interface -replace '.*\s{2,}', ''
-    netsh interface ipv4 set subinterface "$interfaceName" mtu=$mtu store=persistent *>$null
-}
+Get-NetIPInterface | Set-NetIPInterface -NlMtuBytes $mtu -AddressFamily IPv4
 Write-Host "Set IPv4 MTU To $mtu"
 
 # Disable Jumbo Packets
@@ -201,8 +192,7 @@ foreach ($setting in $rssSettings) {
 Write-Host "Optimize RSS"
 
 # Enable Network Task Offloading
-netsh int ipv4 set global taskoffload=enabled | Out-Null
-netsh int ipv6 set global taskoffload=enabled | Out-Null
+Set-NetOffloadGlobalSetting -TaskOffload Enabled
 Set-TCPSetting "DisableTaskOffload" 0
 Write-Host "Enable Network Task Offloading"
 
@@ -245,16 +235,18 @@ Write-Host "Delete Address Resolution Protocol (ARP) Cache"
 # Increase Address Resolution Protocol (ARP) Cache Size To 4096
 netsh int ipv4 set global neighborcachelimit=4096 | Out-Null
 netsh int ipv6 set global neighborcachelimit=4096 | Out-Null
+Set-NetIPv6Protocol
+Set-NetIPv4Protocol
 Write-Host "Increase Address Resolution Protocol (ARP) Cache Size to 4096"
 
 # Disable Direct Memory Access (DMA) Coalescing
 Set-NICProperty "DMACoalescing" "0"
 Write-Host "Disable Direct Memory Access (DMA) Coalescing"
 
-# Disable Receive Segment Coalescing State (RSC)
+# Disable Receive Segment Coalescing (RSC)
 Set-NICProperty "RscIPv4" "0"
 Set-NICProperty "RscIPv6" "0"
-Disable-NetAdapterRsc -Name *
+Set-NetOffloadGlobalSetting -ReceiveSegmentCoalescing Disabled
 Write-Host "Disable Receive Segment Coalescing State (RSC)"
 
 # Disable Packet Coalescing
@@ -267,8 +259,9 @@ Set-NetTCPSetting -EcnCapability Enabled
 Write-Host "Enable Explicit Congestion Notification (ECN)"
 
 # Set Congestion Provider To BBR2/CTCP
+# BBR2 Breaks sunshine, steam, and badlion
 $osInfo = Get-WmiObject -Class Win32_OperatingSystem
-if ($osInfo.Caption -match "Windows 11") {
+if ($osInfo.Caption -match "Windows 12") {
     netsh int tcp set supplemental Internet CongestionProvider=bbr2 | Out-Null
     Write-Host "Set Congestion Provider To BBR2"
 } else {
@@ -514,12 +507,22 @@ netsh int tcp set global fastopen=enabled | Out-Null
 Write-Host "Enable TCP Fast Open"
 
 # Disable Flow Control
-Set-NICProperty "FlowControl" "0"
-Write-Host "Disable Flow Control"
+if ($OptimizeFor -eq 1) {
+    Set-NICProperty "FlowControl" "3"
+    Write-Host "Enable Flow Control"
+} else {
+    Set-NICProperty "FlowControl" "0"
+    Write-Host "Disable Flow Control"
+}
 
 # Disable Interrupt Moderation
-Set-NICProperty "InterruptModeration" "0"
-Write-Host "Disable Interrupt Moderation"
+if ($OptimizeFor -eq 1) {
+    Set-NICProperty "InterruptModeration" "1"
+    Write-Host "Enable Interrupt Moderation"
+} else {
+    Set-NICProperty "InterruptModeration" "0"
+    Write-Host "Disable Interrupt Moderation"
+}
 
 # Set Max Receive/Transmit Buffers
 $networkCards = Get-ChildItem "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
@@ -587,6 +590,11 @@ foreach ($app in $apps) {
     New-NetQosPolicy -Name $app -AppPathNameMatchCondition "$app.exe" -DscpAction 46 -PolicyStore ActiveStore | Out-Null
 }
 Write-Host "Optimize DSCP For Certain Applications"
+
+# Disable Java Firewall
+Get-NetFirewallRule -DisplayName "Minecraft*" | Remove-NetFirewallRule
+"Inbound","Outbound" | ForEach-Object { New-NetFirewallRule -DisplayName "Minecraft $_" -Direction $_ -Program ($env:JAVA_HOME + "javaw.exe") -Action Allow } | Out-Null
+Write-Host "Disable Java Firewall"
 
 # Lower QoS TimerResolution
 Set-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\Psched" -Name "TimerResolution" -Value 1 -Type DWord
