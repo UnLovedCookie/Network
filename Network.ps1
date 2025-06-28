@@ -1,4 +1,3 @@
-# irm ln.run/cookie | iex
 # irm https://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1 | iex
 # https://discord.gg/dptDHp9p9k
 # https://github.com/UnLovedCookie/Network
@@ -41,13 +40,19 @@ function Set-TCPSetting {
 
 # User Input
 cls
-Write-Host "Connection Type:`n[1] Fiber (100+ mbps)`n[2] VDSL (20-100 mbps)`n[3] ADSL (20< mbps)"
+Write-Host "Connection Type:`n`n[1] Fiber (100+ mbps)`n[2] VDSL  (20-100 mbps)`n[3] ADSL  (20< mbps)`n"
 $ConnectionType = [int](Read-Host "Choose (1-3)")
 cls
-Write-Host "Optimize For:`n[1] Throughput (Speed)`n[2] Latency (Ping)"
-Write-Host "Disable LSO, Flow Control, Interrupt Moderation, set AutoTuning to highly restricted, and buffers to 128"
+Write-Host "Optimize For:`n`n[1] Throughput (Speed)"
+Write-Host "    - Set LSO, Flow Control, and Interrupt Moderation to Enabled;"
+Write-Host "      Auto Tuning to Normal; and Rx/Tx Buffers to Max.`n"
+Write-Host "[2] Latency (Ping)"
+Write-Host "    - Set LSO, Flow Control, and Interrupt Moderation to Disabled;"
+Write-Host "      Auto Tuning to Highly Restricted; and Rx/Tx Buffers to 128.`n"
 $OptimizeFor = [int](Read-Host "Choose (1-2)")
 cls
+
+Sets LSO, Flow Control, and Interrupt Moderation to disabled, Auto Tuning to highly restricted, and Rx/Tx Buffers to 128
 
 # Reset Advanced Network Adapter Options
 Reset-NetAdapterAdvancedProperty -DisplayName '*' -NoRestart
@@ -199,7 +204,7 @@ Write-Host "Enable Network Task Offloading"
 
 # Disable TCP Chimney Offload
 Set-NetOffloadGlobalSetting -Chimney Disabled
-Write-Host "TCP Chimney Offload"
+Write-Host "Disable TCP Chimney Offload"
 
 # Disable IPsec Offload
 Disable-NetAdapterIPsecOffload -Name *
@@ -234,10 +239,8 @@ netsh int ip delete arpcache | Out-Null
 Write-Host "Delete Address Resolution Protocol (ARP) Cache"
 
 # Increase Address Resolution Protocol (ARP) Cache Size To 4096
-netsh int ipv4 set global neighborcachelimit=4096 | Out-Null
-netsh int ipv6 set global neighborcachelimit=4096 | Out-Null
-Set-NetIPv6Protocol
-Set-NetIPv4Protocol
+Set-NetIPv4Protocol -NeighborCacheLimitEntries 4096
+Set-NetIPv6Protocol -NeighborCacheLimitEntries 4096
 Write-Host "Increase Address Resolution Protocol (ARP) Cache Size to 4096"
 
 # Disable Direct Memory Access (DMA) Coalescing
@@ -421,7 +424,7 @@ Write-Host "Increase Concurrent Connections Limit"
 
 # Remove TCP Connection Limit
 Set-TCPSetting "EnableConnectionRateLimiting" 0
-Write-Host "Remove TCP Connection Limit"
+Write-Host "Disable TCP Connection Limit"
 
 # Set Dynamic Port Range to Maximum
 Set-NetTCPSetting -DynamicPortRangeStartPort 1024 -DynamicPortRangeNumberOfPort 64512
@@ -430,7 +433,7 @@ Write-Host "Set Dynamic Port Range to Maximum"
 
 # Unlimited Outstanding Send Packets
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" -Name "MaxOutstandingSends" -ErrorAction SilentlyContinue
-Write-Host "Unlimited Outstanding Send Packets"
+Write-Host "Disable Outstanding Send Packets Limit"
 
 # Optimize TCP Acks, Sacks, and Syns
 $networkInterfaces = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
