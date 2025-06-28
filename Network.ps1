@@ -29,6 +29,7 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 function Set-NICProperty {
     param([string]$Keyword, [string]$Value)
     Get-NetAdapterAdvancedProperty -RegistryKeyword "*$Keyword*" | 
+    Where-Object { $_.RegistryKeyword -ne "EEEMaxSupportSpeed" } |
     ForEach-Object { Set-NetAdapterAdvancedProperty -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart }
 }
 
@@ -44,7 +45,7 @@ Write-Host "Connection Type:`n[1] Fiber (100+ mbps)`n[2] VDSL (20-100 mbps)`n[3]
 $ConnectionType = [int](Read-Host "Choose (1-3)")
 cls
 Write-Host "Optimize For:`n[1] Throughput (Speed)`n[2] Latency (Ping)"
-Write-Host "Disables LSO, Flow Control, Interrupt Moderation, and sets AutoTuning to highly restricted"
+Write-Host "Disable LSO, Flow Control, Interrupt Moderation, set AutoTuning to highly restricted, and buffers to 128"
 $OptimizeFor = [int](Read-Host "Choose (1-2)")
 cls
 
@@ -366,7 +367,7 @@ $powerSettings = @(
     @{Keyword="DeviceSleepOnDisconnect"; Value="0"},
     # Disable Energy Efficient Ethernet
     @{Keyword="EEE"; Value="0"},
-    @{Keyword="EeePhyEnable"; Value="0"},
+    @{Keyword="EEEPhyEnable"; Value="0"},
     @{Keyword="EnableGreenEthernet"; Value="0"},
     @{Keyword="EEELinkAdvertisement"; Value="0"},
     @{Keyword="AdvancedEEE"; Value="0"},
@@ -493,6 +494,13 @@ Write-Host "Disable RTT Resiliency for Non-SACK Clients"
 Set-TCPSetting "TcpTimedWaitDelay" 30
 Write-Host "Set TIME_WAIT Length to Minimum"
 
+# Swuab Timeout Settings
+Set-TCPSetting "KeepAliveTime" 300000
+Set-TCPSetting "KeepAliveInterval" 1000
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters" -Name "MaxCacheTtl" -Value "86400" -Type DWord
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters" -Name "MaxNegativeCacheTtl" -Value "0" -Type DWord
+Write-Host "Swuab Timeout Settings"
+
 # Enable Network Direct Memory Access (NetDMA)
 netsh int tcp set global netdma=enabled | Out-Null
 Set-TCPSetting "EnableTCPA" 1
@@ -525,37 +533,43 @@ if ($OptimizeFor -eq 1) {
 }
 
 # Set Max Receive/Transmit Buffers
-$networkCards = Get-ChildItem "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
-                ForEach-Object { Get-ItemProperty $_.PSPath | Select-Object Description }
+if ($OptimizeFor -eq 1) {
+    $networkCards = Get-ChildItem "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
+                    ForEach-Object { Get-ItemProperty $_.PSPath | Select-Object Description }
 
-foreach ($card in $networkCards) {
-    $deviceClasses = Get-ChildItem "HKLM:\System\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}" -Recurse |
-                    Get-ItemProperty |
-                    Where-Object { $_.DriverDesc -eq $card.Description }
+    foreach ($card in $networkCards) {
+        $deviceClasses = Get-ChildItem "HKLM:\System\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}" -Recurse |
+                        Get-ItemProperty |
+                        Where-Object { $_.DriverDesc -eq $card.Description }
 
-    foreach ($device in $deviceClasses) {
-        $devicePath = $device.PSPath
-        
-        # ReceiveBuffers
-        $receiveBuffersPath = Join-Path $devicePath "Ndi\params\*ReceiveBuffers"
-        if (Test-Path $receiveBuffersPath) {
-            $maxValue = Get-ItemProperty $receiveBuffersPath -Name "Max" -ErrorAction SilentlyContinue
-            if ($maxValue) {
-                Set-NICProperty "ReceiveBuffers" $maxValue.Max
+        foreach ($device in $deviceClasses) {
+            $devicePath = $device.PSPath
+            
+            # ReceiveBuffers
+            $receiveBuffersPath = Join-Path $devicePath "Ndi\params\*ReceiveBuffers"
+            if (Test-Path $receiveBuffersPath) {
+                $maxValue = Get-ItemProperty $receiveBuffersPath -Name "Max" -ErrorAction SilentlyContinue
+                if ($maxValue) {
+                    Set-NICProperty "ReceiveBuffers" $maxValue.Max
+                }
             }
-        }
-        
-        # TransmitBuffers
-        $transmitBuffersPath = Join-Path $devicePath "Ndi\params\*TransmitBuffers"
-        if (Test-Path $transmitBuffersPath) {
-            $maxValue = Get-ItemProperty $transmitBuffersPath -Name "Max" -ErrorAction SilentlyContinue
-            if ($maxValue) {
-                Set-NICProperty "TransmitBuffers" $maxValue.Max
+            
+            # TransmitBuffers
+            $transmitBuffersPath = Join-Path $devicePath "Ndi\params\*TransmitBuffers"
+            if (Test-Path $transmitBuffersPath) {
+                $maxValue = Get-ItemProperty $transmitBuffersPath -Name "Max" -ErrorAction SilentlyContinue
+                if ($maxValue) {
+                    Set-NICProperty "TransmitBuffers" $maxValue.Max
+                }
             }
         }
     }
+    Write-Host "Set Max Receive/Transmit Buffers"
+} else {
+    Set-NICProperty "ReceiveBuffers" 128
+    Set-NICProperty "TransmitBuffers" 128
+    Write-Host "Disable Large Send Offload (LSO)"
 }
-Write-Host "Set Max Receive/Transmit Buffers"
 
 # Set Network Level Priorities
 $prioritySettings = @(
