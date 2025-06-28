@@ -1,4 +1,4 @@
-# 🚀 Network Optimization Batch
+# 🚀 Network Optimization Script
 
 A comprehensive PowerShell script designed to enhance Windows network performance by reducing latency and increasing throughput through advanced stack tuning.
 
