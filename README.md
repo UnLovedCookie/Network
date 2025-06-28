@@ -1,12 +1,12 @@
-# 🚀 Network Optimization Script
-
-A comprehensive PowerShell script designed to enhance Windows network performance by reducing latency and increasing throughput through advanced stack tuning.
-
----
-
-## 📌 Overview
-
-Windows prioritizes compatibility, power efficiency, and stability over raw performance. This script reconfigures the network stack to unlock higher performance, making it ideal for gamers, streamers, and power users seeking optimal networking conditions.
+<h1 align="center">
+🚀 Network Optimization Script
+</h1>
+<h3 align="center">
+Improve the throughput and reduce latency by optimizing the Windows network stack.
+</h3>
+<p align="center">
+<i>“Simply put, Windows isn't optimized for the lowest possible latency and greatest performance. It's optimized for best compatibility, power efficiency, and stability.”</i>
+</p>
 
 ---
 ## 📥 Installation
