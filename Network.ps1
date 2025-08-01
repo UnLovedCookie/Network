@@ -262,10 +262,15 @@ netsh int tcp set global ecn=enabled | Out-Null
 Set-NetTCPSetting -EcnCapability Enabled
 Write-Host "Enable Explicit Congestion Notification (ECN)"
 
+# Enable Large MTU on The Loopback Interface
+# Fix BBR2 breaking sunshine, steam, and badlion
+netsh int ipv4 set global loopbacklargemtu=enable | Out-Null
+netsh int ipv6 set global loopbacklargemtu=enable | Out-Null
+Write-Host "Enable Large MTU on The Loopback Interface"
+
 # Set Congestion Provider To BBR2/CTCP
-# BBR2 Breaks sunshine, steam, and badlion
 $osInfo = Get-WmiObject -Class Win32_OperatingSystem
-if ($osInfo.Caption -match "Windows 12") {
+if ($osInfo.Caption -match "Windows 11") {
     netsh int tcp set supplemental Internet CongestionProvider=bbr2 | Out-Null
     Write-Host "Set Congestion Provider To BBR2"
 } else {
