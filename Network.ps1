@@ -27,8 +27,9 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 # Functions
 function Set-NICProperty {
     param([string]$Keyword, [string]$Value)
-    Get-NetAdapterAdvancedProperty -RegistryKeyword "*$Keyword*" | 
-    Where-Object { $_.RegistryKeyword -ne "EEEMaxSupportSpeed" } |
+    $exclude = @('EEEMaxSupportSpeed','IEEE11nMode')
+    Get-NetAdapterAdvancedProperty -RegistryKeyword "*$Keyword*" |
+    Where-Object { $exclude -notcontains $_.RegistryKeyword } |
     ForEach-Object { Set-NetAdapterAdvancedProperty -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart }
 }
 
@@ -44,11 +45,11 @@ Write-Host "Connection Type:`n`n[1] Fiber (100+ mbps)`n[2] VDSL  (20-100 mbps)`n
 $ConnectionType = [int](Read-Host "Choose (1-3)")
 cls
 Write-Host "Optimize For:`n`n[1] Throughput (Speed)"
-Write-Host "    - Set LSO, Flow Control, and Interrupt Moderation to Enabled;"
-Write-Host "      Auto Tuning to Normal; and Rx/Tx Buffers to Max.`n"
+Write-Host "    - Enable LSO, Flow Control, and Interrupt Moderation;"
+Write-Host "      Set Auto Tuning to Normal; and Rx/Tx Buffers to Max.`n"
 Write-Host "[2] Latency (Ping)"
-Write-Host "    - Set LSO, Flow Control, and Interrupt Moderation to Disabled;"
-Write-Host "      Auto Tuning to Highly Restricted; and Rx/Tx Buffers to 128.`n"
+Write-Host "    - Disable LSO, Flow Control, and Interrupt Moderation;"
+Write-Host "      Set Auto Tuning to Highly Restricted; and Rx/Tx Buffers to 128.`n"
 $OptimizeFor = [int](Read-Host "Choose (1-2)")
 cls
 
@@ -439,6 +440,10 @@ Write-Host "Set Dynamic Port Range to Maximum"
 # Unlimited Outstanding Send Packets
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" -Name "MaxOutstandingSends" -ErrorAction SilentlyContinue
 Write-Host "Disable Outstanding Send Packets Limit"
+
+# Enable All Wireless Modes
+Set-NetAdapterAdvancedProperty -RegistryKeyword WirelessMode -RegistryValue 34 -NoRestart
+Set-NetAdapterAdvancedProperty -RegistryKeyword IEEE11nMode -RegistryValue 3 -NoRestart
 
 # Optimize TCP Acks, Sacks, and Syns
 $networkInterfaces = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
