@@ -4,110 +4,161 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 
-# Self-Elevate
-if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $args = $MyInvocation.Line.Replace($MyInvocation.InvocationName, "").Trim()
-    $script = if ($PSCommandPath) { 
-        "`"& '$PSCommandPath' $args`"" 
-    } else { 
-        "`"&([ScriptBlock]::Create((irm https://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1))) $args`"" 
+# Relaunch elevated with newest 64-bit PowerShell then exit
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $argLine = ($args | ForEach-Object { "'$([Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($_))'" }) -join ' '
+
+    # find newest 64-bit pwsh, else fallback to 64-bit Windows PowerShell
+    $pwsh = Get-ChildItem "$env:ProgramFiles\PowerShell\*\pwsh.exe" -ErrorAction Ignore |
+            Sort-Object VersionInfo.ProductVersion -Descending |
+            Select-Object -First 1 -Expand FullName
+    if (-not $pwsh) {
+        $pwsh = "$env:WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
     }
-    
-    $cmd = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
-    $useWT = $null -ne (Get-Command wt.exe -ErrorAction SilentlyContinue)
-    
-    if ($useWT) {
-        Start-Process wt.exe -ArgumentList "$cmd -ExecutionPolicy Bypass -NoProfile -Command $script" -Verb RunAs
+
+    if (Get-Command wt.exe -ErrorAction Ignore) {
+        Start-Process wt.exe -ArgumentList @("-p", "Windows PowerShell", "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $argLine") -Verb RunAs
     } else {
-        Start-Process $cmd -ArgumentList "-ExecutionPolicy Bypass -NoProfile -Command $script" -Verb RunAs
+        Start-Process $pwsh -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $argLine" -Verb RunAs
     }
     exit
 }
 
 # Functions
 function Set-NICProperty {
-    param([string]$Keyword, [string]$Value)
-    $exclude = @('EEEMaxSupportSpeed','IEEE11nMode')
-    Get-NetAdapterAdvancedProperty -RegistryKeyword "*$Keyword*" |
-    Where-Object { $exclude -notcontains $_.RegistryKeyword } |
-    ForEach-Object { Set-NetAdapterAdvancedProperty -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart }
+    param($Keyword,$Value)
+    Get-NetAdapterAdvancedProperty |
+      Where-Object { $_.RegistryKeyword -like "$Keyword*" -or $_.RegistryKeyword -like "*$Keyword" } |
+      ForEach-Object {
+          $need = [string]$Value
+          if ([string]$_.RegistryValue -eq $need) {
+              Write-Host "- $($_.Name) $($_.RegistryKeyword) already $need" -ForegroundColor Blue
+              return
+          }
+          try {
+              Set-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart -ErrorAction Stop
+              $now = [string](Get-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword $_.RegistryKeyword).RegistryValue
+              if ($now -eq $need) {
+                  Write-Host "* $($_.Name) $($_.RegistryKeyword) set to $need" -ForegroundColor Green
+              } else {
+                  Write-Host "X $($_.Name) $($_.RegistryKeyword) not set" -ForegroundColor Red
+              }
+          } catch {
+              Write-Host "X $($_.Name) $($_.RegistryKeyword) error: $($_.Exception.Message)" -ForegroundColor Red
+          }
+      }
 }
 
+
 function Set-TCPSetting {
-    param([string]$Setting, [int]$Value)
-    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" -Name $Setting -Value $Value -Type DWord
-    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" -Name $Setting -Value $Value -Type DWord
+  param([string]$Setting,[int]$Value)
+  $paths=@(
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters',
+    'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters'
+  )
+  foreach($p in $paths){
+    try{$cur=Get-ItemPropertyValue -Path $p -Name $Setting -ErrorAction SilentlyContinue}catch{$cur=$null}
+    if($cur -eq $Value){Write-Host "- $p\$Setting already $Value" -ForegroundColor Blue;continue}
+    try{
+      New-ItemProperty -Path $p -Name $Setting -Value $Value -PropertyType DWord -Force|Out-Null
+      if((Get-ItemPropertyValue -Path $p -Name $Setting) -eq $Value){
+        Write-Host "* $p\$Setting set to $Value" -ForegroundColor Green
+      }else{
+        Write-Host "X $p\$Setting not set" -ForegroundColor Red
+      }
+    }catch{
+      Write-Host "X $p\$Setting error: $($_.Exception.Message)" -ForegroundColor Red
+    }
+  }
+}
+
+
+function Show-Menu {
+  param([string]$Title,[object[]]$Options)  # "Label" or @("Label","Description")
+  $i=0
+  while($true){
+    cls; Write-Host "$Title`n"
+    for($x=0;$x -lt $Options.Length;$x++){
+      $o=$Options[$x]; if($o -isnot [array]){$o=@($o,'')}
+      $sel=if($x -eq $i){">> "}else{"   "}
+      Write-Host "$sel$($o[0])" -ForegroundColor ($(if($x -eq $i){"Cyan"}else{"White"}))
+      if($o[1]){ Write-Host "$($o[1])" }
+    }
+    switch([console]::ReadKey($true).Key){
+      'UpArrow'   { if($i){$i--} }
+      'DownArrow' { if($i -lt $Options.Length-1){$i++} }
+      'Enter'     { return $i+1 }
+    }
+  }
 }
 
 # User Input
-cls
-Write-Host "Connection Type:`n`n[1] Fiber (100+ mbps)`n[2] VDSL  (20-100 mbps)`n[3] ADSL  (20< mbps)`n"
-$ConnectionType = [int](Read-Host "Choose (1-3)")
-cls
-Write-Host "Optimize For:`n`n[1] Throughput (Speed)"
-Write-Host "    - Enable LSO, Flow Control, and Interrupt Moderation;"
-Write-Host "      Set Auto Tuning to Normal; and Rx/Tx Buffers to Max.`n"
-Write-Host "[2] Latency (Ping)"
-Write-Host "    - Disable LSO, Flow Control, and Interrupt Moderation;"
-Write-Host "      Set Auto Tuning to Highly Restricted; and Rx/Tx Buffers to 128.`n"
-$OptimizeFor = [int](Read-Host "Choose (1-2)")
+$ConnectionType = Show-Menu "Connection Type:" @(
+  @("Fiber (100+ mbps)","Best for very high speeds"),
+  @("VDSL (20-100 mbps)","Balanced speed & stability"),
+  @("ADSL (<20 mbps)","For slower lines")
+)
+
+$OptimizeFor = Show-Menu "Optimize For:" @(
+  @("Throughput (Higher Speeds)","Enable Packet Coalescing, LSO, & Throughput Booster; Normal AutoTuning; Max Rx/Tx Buffers"),
+  @("Latency (Lower Ping)","Disable Packet Coalescing, LSO, & Throughput Booster; Highly Restricted AutoTuning; 128B Rx/Tx Buffers")
+)
+
+$Stability = Show-Menu "Stability:" @(
+  @("Stable Connection (No Lag Spikes)","Disable Interrupt Moderation, & Flow Control"),
+  @("Unstable Connection (Lag Spikes)","Enable Interrupt Moderation, & Flow Control")
+)
 cls
 
-Sets LSO, Flow Control, and Interrupt Moderation to disabled, Auto Tuning to highly restricted, and Rx/Tx Buffers to 128
+<#
+
+
+Advanced Network Adapter Settings
+
+
+#>
 
 # Reset Advanced Network Adapter Options
 Reset-NetAdapterAdvancedProperty -DisplayName '*' -NoRestart
 Write-Host "Reset Advanced Network Adapter Options"
 
-# Reset TCP/IP Settings
-@(
-    "netsh int tcp reset",
-    "netsh winsock reset",
-    "netsh int ip reset",
-    "netsh int ipv4 reset",
-    "netsh int ipv6 reset"
-) | ForEach-Object { Invoke-Expression $_ *>$null }
-Write-Host "Reset TCP/IP Settings"
-
-# Optimize Time To Live (TTL)
-$DefaultTTL = switch ($ConnectionType) {
-    1 { 255 }
-    2 { 128 }
-    3 { 64 }
-    default { 128 }
-}
-Set-TCPSetting "DefaultTTL" $DefaultTTL
-Get-NetIPInterface | Set-NetIPInterface -CurrentHopLimit $DefaultTTL
-Write-Host "Set Time To Live (TTL) To $DefaultTTL"
-
-# MTU Optimization
-Get-NetIPInterface | Set-NetIPInterface -NlMtuBytes 1500 -AddressFamily IPv4
-
-$mtu = 1501
-do {
-    $mtu--
-    $ping = ping google.com -f -n 1 -4 -l $mtu
-    $fragmented = $ping -match "fragmented"
-} while ($fragmented)
-
-# Double check to make sure
-$ping = ping google.com -f -n 3 -4 -l $mtu
-$fragmented = $ping -match "fragmented"
-if ($fragmented) {
-    do {
-        $mtu--
-        $ping = ping google.com -f -n 1 -4 -l $mtu
-        $fragmented = $ping -match "fragmented"
-    } while ($fragmented)
+# Throughput Booster
+if ($OptimizeFor -eq 1) {
+    Set-NICProperty "ThroughputBoosterEnabled" "1"
+    Write-Host "Enable Throughput Booster"
+} else {
+    Set-NICProperty "ThroughputBoosterEnabled" "0"
+    Write-Host "Disable Throughput Booster"
 }
 
-if ($mtu -ge 1472) { $mtu = 1500 }
-Get-NetIPInterface | Set-NetIPInterface -NlMtuBytes $mtu -AddressFamily IPv4
-Write-Host "Set IPv4 MTU To $mtu"
+# Flow Control
+if ($Stability -eq 1) {
+    Set-NICProperty "FlowControl" "0"
+    Write-Host "Disable Flow Control"
+} else {
+    Set-NICProperty "FlowControl" "3"
+    Write-Host "Enable Flow Control"
+}
 
-# Disable Jumbo Packets
-Set-NICProperty "JumboPacket" "1514"
-Write-Host "Disable Jumbo Packets"
+# Packet Coalescing
+if ($OptimizeFor -eq 1) {
+    Set-PacketCoalescingFilter Disabled
+    Set-NICProperty "Packet Coalescing" "0"
+    Write-Host "Disable Packet Coalescing"
+} else {
+    Set-PacketCoalescingFilter Enabled
+    Set-NICProperty "Packet Coalescing" "1"
+    Write-Host "Enable Packet Coalescing"
+}
+
+# Interrupt Moderation
+if ($Stability -eq 1) {
+    Set-NICProperty "InterruptModeration" "0"
+    Write-Host "Disable Interrupt Moderation"
+} else {
+    Set-NICProperty "InterruptModeration" "1"
+    Write-Host "Enable Interrupt Moderation"
+}
 
 # Large Send Offload (LSO)
 if ($OptimizeFor -eq 1) {
@@ -122,36 +173,186 @@ if ($OptimizeFor -eq 1) {
     Write-Host "Disable Large Send Offload (LSO)"
 }
 
-# Set Fast Send Datagram
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\AFD\Parameters" -Name "FastSendDatagramThreshold" -Value $MTU -Type DWord
-Write-Host "Set Fast Send Datagram To $MTU"
+# Enable All Wireless Modes
+Set-NetAdapterAdvancedProperty -RegistryKeyword WirelessMode -RegistryValue 34 -NoRestart
+Set-NetAdapterAdvancedProperty -RegistryKeyword IEEE11nMode -RegistryValue 3 -NoRestart
+Write-Host "Enable All Wireless Modes"
 
-# Disable Large MTU
-Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\LanmanServer\Parameters" -Name "DisableLargeMTU" -Value 0 -Type DWord
-Write-Host "Disable Large MTU"
+# Disable Jumbo Packets
+Set-NICProperty "JumboPacket" "1514"
+Write-Host "Disable Jumbo Packets"
 
-# Enable Path Maximum Transfer Unit (PMTU)
-Set-TCPSetting "EnablePMTUDiscovery" 1
-Write-Host "Enable Path Maximum Transfer Unit (PMTU)"
+# Disable Direct Memory Access (DMA) Coalescing
+Set-NICProperty "DMACoalescing" "0"
+Write-Host "Disable Direct Memory Access (DMA) Coalescing"
 
-# Enable Path Maximum Transfer Unit (PMTU) Black Hole Detection
-Set-TCPSetting "EnablePMTUBHDetect" 1
-Write-Host "Enable Path Maximum Transfer Unit (PMTU) Black Hole Detection"
+# Disable Receive Segment Coalescing (RSC)
+Set-NetOffloadGlobalSetting -ReceiveSegmentCoalescing Disabled
+Set-NICProperty "RscIPv4" "0"
+Set-NICProperty "RscIPv6" "0"
+Write-Host "Disable Receive Segment Coalescing State (RSC)"
 
-# Disable Window Scaling Heuristics
-Set-NetTCPSetting -ScalingHeuristics Disabled
-Write-Host "Disable Window Scaling Heuristics"
+# Disable TCP Chimney Offload
+Set-NetOffloadGlobalSetting -Chimney Disabled
+Write-Host "Disable TCP Chimney Offload"
 
-# Enable TCP Window Scaling, Disable TCP 1323 Timestamps
-Set-NetTCPSetting -Timestamps Disabled
-Set-TCPSetting "Tcp1323Opts" 1
-Write-Host "Enable TCP Window Scaling"
-Write-Host "Disable TCP 1323 Timestamps"
+# Enable Network Task Offloading
+Set-NetOffloadGlobalSetting -TaskOffload Enabled
+Write-Host "Enable Network Task Offloading"
 
-# Set Default TCP Window Size
-Set-TCPSetting "GlobalMaxTcpWindowSize" 65536
-Set-TCPSetting "TcpWindowSize" 65536
-Write-Host "Set Default TCP Window Size"
+# Enable Address Resolution Protocol (ARP) Offload
+Set-NICProperty "PMARPOffload" "1"
+Write-Host "Enable Address Resolution Protocol (ARP) Offload"
+
+# Disable IPsec Offload
+Disable-NetAdapterIPsecOffload -Name *
+Set-NICProperty "IPsecOffloadV1IPv4" "0"
+Set-NICProperty "IPsecOffloadV2" "0"
+Set-NICProperty "IPsecOffloadV2IPv4" "0"
+Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\Ipsec" -Name "EnabledOffload" -Value 0 -Type DWord
+Write-Host "Disable IPsec Offload"
+
+# Optimize Receive Side Scaling (RSS)
+Set-NetOffloadGlobalSetting -ReceiveSideScaling Enabled
+$MaxRssProc = [Environment]::ProcessorCount - 2
+if ($MaxRssProc -lt 1) { $MaxRssProc = 1 }
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Ndis\Parameters" -Name "RssBaseCpu" -Value 1 -Type DWord
+$rssSettings = @(
+    @{Keyword="RSS"; Value="1"},
+    @{Keyword="NumRssQueues"; Value="4"},
+    @{Keyword="RSSProfile"; Value="4"},
+    @{Keyword="NumaNodeId"; Value="0"},
+    @{Keyword="RssBaseProcGroup"; Value="0"},
+    @{Keyword="RssMaxProcGroup"; Value="0"},
+    @{Keyword="RssBaseProcNumber"; Value="0"},
+    @{Keyword="RssMaxProcNumber"; Value="$MaxRssProc"},
+    @{Keyword="MaxRssProcessors"; Value="$MaxRssProc"},
+    @{Keyword="RssV2"; Value="1"},
+    @{Keyword="ValidateRssV2"; Value="1"}
+)
+foreach ($setting in $rssSettings) {
+    Set-NICProperty $setting.Keyword $setting.Value
+}
+Write-Host "Optimize Receive Side Scaling (RSS)"
+
+# Enable UDP and TCP Checksums
+Enable-NetAdapterChecksumOffload -Name *
+$checksumSettings = @(
+    @{Keyword="TCPUDPChecksumOffloadIPv4"; Value="3"},
+    @{Keyword="TCPUDPChecksumOffloadIPv6"; Value="3"},
+    @{Keyword="UDPChecksumOffloadIPv4"; Value="3"},
+    @{Keyword="UDPChecksumOffloadIPv6"; Value="3"},
+    @{Keyword="TCPChecksumOffloadIPv4"; Value="3"},
+    @{Keyword="TCPChecksumOffloadIPv6"; Value="3"},
+    @{Keyword="IPChecksumOffloadIPv4"; Value="3"}
+)
+foreach ($setting in $checksumSettings) {
+    Set-NICProperty $setting.Keyword $setting.Value
+}
+Write-Host "Enable UDP and TCP Checksums"
+
+# Disable Network Adapter Power Management
+Disable-NetAdapterPowerManagement -Name * -NoRestart
+Write-Host "Disable Network Adapter Power Management"
+
+# Disable Network Adapter Power Saving Features
+$powerSettings = @(
+    # Disable Wake Features
+    @{Keyword="WakeOnMagicPacket"; Value="0"},
+    @{Keyword="WakeOnPattern"; Value="0"},
+    @{Keyword="WakeOnLink"; Value="0"},
+    @{Keyword="WakeOnLinkChange"; Value="0"},
+    @{Keyword="S5WakeOnLan"; Value="0"},
+    @{Keyword="WolShutdownLinkSpeed"; Value="2"},
+    @{Keyword="ModernStandbyWoLMagicPacket"; Value="0"},
+    @{Keyword="DeviceSleepOnDisconnect"; Value="0"},
+    # Disable Energy Efficient Ethernet
+    @{Keyword="EEE"; Value="0"},
+    @{Keyword="EEEPhyEnable"; Value="0"},
+    @{Keyword="EnableGreenEthernet"; Value="0"},
+    @{Keyword="EEELinkAdvertisement"; Value="0"},
+    @{Keyword="AdvancedEEE"; Value="0"},
+    # Disable Ultra Low Power Mode
+    @{Keyword="ULPMode"; Value="0"},
+    # Disable Wi-Fi capability that saves power consumption
+    @{Keyword="uAPSDSupport"; Value="0"},
+    # Max Transmit Power
+    @{Keyword="Transmit Power"; Value="100"},
+    # Disable Power Saving Features
+    @{Keyword="NicAutoPowerSaver"; Value="0"},
+    @{Keyword="SelectiveSuspend"; Value="0"},
+    @{Keyword="EnablePME"; Value="0"},
+    @{Keyword="ReduceSpeedOnPowerDown"; Value="0"},
+    @{Keyword="PowerSavingMode"; Value="0"},
+    @{Keyword="SavePowerNowEnabled"; Value="0"},
+    @{Keyword="GigaLite"; Value="0"},
+    @{Keyword="EnableSavePowerNow"; Value="0"},
+    @{Keyword="bLowPowerEnable"; Value="0"},
+    @{Keyword="EnablePowerManagement"; Value="0"},
+    @{Keyword="EnableDynamicPowerGating"; Value="0"},
+    @{Keyword="DisableDelayedPowerUp"; Value="1"},
+    @{Keyword="EnableConnectedPowerGating"; Value="0"},
+    @{Keyword="AutoPowerSaveModeEnabled"; Value="0"},
+    @{Keyword="PowerSaveMode"; Value="0"},
+    @{Keyword="AutoDisableGigabit"; Value="0"},
+    @{Keyword="PowerDownPll"; Value="0"},
+    @{Keyword="S5NicKeepOverrideMacAddrV2"; Value="0"},
+    @{Keyword="MIMOPowerSaveMode"; Value="3"},
+    @{Keyword="AlternateSemaphoreDelay"; Value="0"},
+    @{Keyword="SipsEnabled"; Value="0"},
+    # Access Point Compatibility Mode: 'High Performance'
+    @{Keyword="ApCompatMode"; Value="0"},
+    # Disable network adapter power management
+    @{Keyword="PnPCapabilities"; Value="24"}
+)
+foreach ($setting in $powerSettings) {
+    Set-NICProperty $setting.Keyword $setting.Value
+}
+Write-Host "Disable Network Adapter Power Saving Features"
+
+# Set Max Receive/Transmit Buffers
+if ($OptimizeFor -eq 1) {
+    foreach ($nic in Get-ChildItem 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\NetworkCards' | 
+    ForEach-Object { (Get-ItemProperty $_.PSPath).Description }) {
+        Get-ChildItem 'HKLM:\System\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}' -Recurse |
+        Get-ItemProperty |
+        Where-Object { $_.DriverDesc -eq $nic } |
+        ForEach-Object {
+            $deviceKeyPath = $_.PSPath
+            foreach ($bufType in 'Receive','Transmit') {
+                $paramPath = Join-Path $deviceKeyPath "Ndi\params\*${bufType}Buffers"
+                if (Test-Path $paramPath) {
+                    $max = (Get-ItemProperty $paramPath -Name Max -ErrorAction SilentlyContinue).Max
+                    if ($max) { Set-NICProperty "$bufType`Buffers" $max }
+                }
+            }
+        }
+    }
+    Write-Host "Set Max Receive/Transmit Buffers"
+} else {
+    Set-NICProperty "ReceiveBuffers" 128
+    Set-NICProperty "TransmitBuffers" 128
+    Write-Host "Set Receive/Transmit Buffers to 128"
+}
+
+<#
+
+
+TCP/IP Settings
+
+
+#>
+
+
+# Reset TCP/IP Settings
+@(
+    "netsh int tcp reset",
+    "netsh winsock reset",
+    "netsh int ip reset",
+    "netsh int ipv4 reset",
+    "netsh int ipv6 reset"
+) | ForEach-Object { Invoke-Expression $_ *>$null }
+Write-Host "Reset TCP/IP Settings"
 
 # Configure Autotuning
 if ($OptimizeFor -eq 1) {
@@ -173,90 +374,48 @@ foreach ($setting in $httpSettings) {
 }
 Write-Host "Enable Winsock/HTTP Autotuning"
 
-# Optimize RSS
-Set-NetOffloadGlobalSetting -ReceiveSideScaling Enabled
-$MaxRssProc = [Environment]::ProcessorCount - 2
-if ($MaxRssProc -lt 1) { $MaxRssProc = 1 }
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Ndis\Parameters" -Name "RssBaseCpu" -Value 1 -Type DWord
-
-# Enable RSS
-$rssSettings = @(
-    @{Keyword="RSS"; Value="1"},
-    @{Keyword="NumRssQueues"; Value="4"},
-    @{Keyword="RSSProfile"; Value="4"},
-    @{Keyword="NumaNodeId"; Value="0"},
-    @{Keyword="RssBaseProcGroup"; Value="0"},
-    @{Keyword="RssMaxProcGroup"; Value="0"},
-    @{Keyword="RssBaseProcNumber"; Value="0"},
-    @{Keyword="RssMaxProcNumber"; Value="$MaxRssProc"},
-    @{Keyword="MaxRssProcessors"; Value="$MaxRssProc"},
-    @{Keyword="RssV2"; Value="1"},
-    @{Keyword="ValidateRssV2"; Value="1"}
-)
-foreach ($setting in $rssSettings) {
-    Set-NICProperty $setting.Keyword $setting.Value
+# Optimize Time To Live (TTL)
+$DefaultTTL = switch ($ConnectionType) {
+    1 { 255 }
+    2 { 128 }
+    3 { 64 }
+    default { 128 }
 }
-Write-Host "Optimize RSS"
+Get-NetIPInterface | Set-NetIPInterface -CurrentHopLimit $DefaultTTL
+Write-Host "Set Time To Live (TTL) To $DefaultTTL"
 
-# Enable Network Task Offloading
-Set-NetOffloadGlobalSetting -TaskOffload Enabled
-Set-TCPSetting "DisableTaskOffload" 0
-Write-Host "Enable Network Task Offloading"
+# Disable Window Scaling Heuristics
+Set-NetTCPSetting -ScalingHeuristics Disabled
+Write-Host "Disable Window Scaling Heuristics"
 
-# Disable TCP Chimney Offload
-Set-NetOffloadGlobalSetting -Chimney Disabled
-Write-Host "Disable TCP Chimney Offload"
+# Enable TCP Window Scaling, Disable TCP 1323 Timestamps
+Set-NetTCPSetting -Timestamps Disabled
+Set-TCPSetting "Tcp1323Opts" 1
+Write-Host "Enable TCP Window Scaling"
+Write-Host "Disable TCP 1323 Timestamps"
 
-# Disable IPsec Offload
-Disable-NetAdapterIPsecOffload -Name *
-Set-NICProperty "IPsecOffloadV1IPv4" "0"
-Set-NICProperty "IPsecOffloadV2" "0"
-Set-NICProperty "IPsecOffloadV2IPv4" "0"
-Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\Ipsec" -Name "EnabledOffload" -Value 0 -Type DWord
-Write-Host "Disable IPsec Offload"
+# IPv4 Maximum Transmission Unit (MTU)
+$mtu=1500; Get-NetIPInterface|Set-NetIPInterface -NlMtuBytes $mtu -AddressFamily IPv4
+do { $ping=ping 8.8.8.8 -f -n 1 -4 -l $mtu -w 750; $mtu-- } while($ping -match 'fragmented')
+$mtu++; if($ping -match 'fragmented' -or $mtu -ge 1472){ $mtu=1500 }
+Get-NetIPInterface|Set-NetIPInterface -NlMtuBytes $mtu -AddressFamily IPv4
+Write-Host "Set IPv4 MTU to $mtu"
 
-# Enable UDP and TCP Checksums
-Enable-NetAdapterChecksumOffload -Name *
-$checksumSettings = @(
-    @{Keyword="TCPUDPChecksumOffloadIPv4"; Value="3"},
-    @{Keyword="TCPUDPChecksumOffloadIPv6"; Value="3"},
-    @{Keyword="UDPChecksumOffloadIPv4"; Value="3"},
-    @{Keyword="UDPChecksumOffloadIPv6"; Value="3"},
-    @{Keyword="TCPChecksumOffloadIPv4"; Value="3"},
-    @{Keyword="TCPChecksumOffloadIPv6"; Value="3"},
-    @{Keyword="IPChecksumOffloadIPv4"; Value="3"}
-)
-foreach ($setting in $checksumSettings) {
-    Set-NICProperty $setting.Keyword $setting.Value
-}
-Write-Host "Enable UDP and TCP Checksums"
+# IPv6 Maximum Transmission Unit (MTU)
+$mtu=1500; Get-NetIPInterface|Set-NetIPInterface -NlMtuBytes $mtu -AddressFamily IPv6
+do { $ping=ping 2001:4860:4860::8888 -n 1 -6 -l $mtu -w 750; $mtu-- } while($ping -match 'too big')
+$mtu++; if($ping -match 'too big' -or $mtu -ge 1452){$mtu=1500}
+Get-NetIPInterface|Set-NetIPInterface -NlMtuBytes $mtu -AddressFamily IPv6
+Write-Host "Set IPv6 MTU to $mtu"
 
-# Enable Address Resolution Protocol (ARP) Offload
-Set-NICProperty "PMARPOffload" "1"
-Write-Host "Enable Address Resolution Protocol (ARP) Offload"
-
-# Delete Address Resolution Protocol (ARP) Cache
-netsh int ip delete arpcache | Out-Null
-Write-Host "Delete Address Resolution Protocol (ARP) Cache"
+# Set Fast Send Datagram
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\AFD\Parameters" -Name "FastSendDatagramThreshold" -Value $MTU -Type DWord
+Write-Host "Set Fast Send Datagram To $MTU"
 
 # Increase Address Resolution Protocol (ARP) Cache Size To 4096
-Set-NetIPv4Protocol -NeighborCacheLimitEntries 4096
 Set-NetIPv6Protocol -NeighborCacheLimitEntries 4096
+Set-NetIPv4Protocol -NeighborCacheLimitEntries 4096
 Write-Host "Increase Address Resolution Protocol (ARP) Cache Size to 4096"
-
-# Disable Direct Memory Access (DMA) Coalescing
-Set-NICProperty "DMACoalescing" "0"
-Write-Host "Disable Direct Memory Access (DMA) Coalescing"
-
-# Disable Receive Segment Coalescing (RSC)
-Set-NICProperty "RscIPv4" "0"
-Set-NICProperty "RscIPv6" "0"
-Set-NetOffloadGlobalSetting -ReceiveSegmentCoalescing Disabled
-Write-Host "Disable Receive Segment Coalescing State (RSC)"
-
-# Disable Packet Coalescing
-Set-NetOffloadGlobalSetting -PacketCoalescingFilter Disabled
-Write-Host "Disable Packet Coalescing"
 
 # Enable Explicit Congestion Notification (ECN)
 netsh int tcp set global ecn=enabled | Out-Null
@@ -283,10 +442,51 @@ if ($osInfo.Caption -match "Windows 11") {
 netsh int tcp set supplemental Internet icw=10 | Out-Null
 Write-Host "Increase the TCP Initial Congestion Window"
 
+# Disable Proportional Rate Reduction
+netsh int tcp set global prr=disabled | Out-Null
+Write-Host "Disable Proportional Rate Reduction"
+
+# Enable Weak Host Model
+Get-NetIPInterface | Set-NetIPInterface -WeakHostReceive Enabled -WeakHostSend Enabled
+Write-Host "Enable Weak Host Model"
+
+# Disable Memory Pressure Protection (MPP)
+Set-NetTCPSetting -MemoryPressureProtection Disabled
+Write-Host "Disable Memory Pressure Protection (MPP)"
+
+# Set Dynamic Port Range to Max
+Set-NetTCPSetting -DynamicPortRangeStartPort 1024 -DynamicPortRangeNumberOfPort 64512
+Write-Host "Set Dynamic Port Range to Max"
+
+# Enable Direct Cache Access (DCA)
+netsh int tcp set global dca=enabled | Out-Null
+Write-Host "Enable Direct Cache Access (DCA)"
+
+# Enable TCP Fast Open
+netsh int tcp set global fastopen=enabled | Out-Null
+Write-Host "Enable TCP Fast Open"
+
+# Enable Network Direct Memory Access (NetDMA)
+netsh int tcp set global netdma=enabled | Out-Null
+Write-Host "Enable NetDMA"
+
+<#
+
+
+Registy Settings
+
+
+#>
+
+
 # Enable SMBv2 / SMBv3
 Set-SmbServerConfiguration -EnableSMB2Protocol $true -Confirm:$false
 Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\LanmanServer\Parameters" -Name "SMB2" -Value 1 -Type DWord
 Write-Host "Enable SMBv2 / SMBv3"
+
+# Enable Large MTU
+Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\LanmanServer\Parameters" -Name "DisableLargeMTU" -Value 0 -Type DWord
+Write-Host "Enable Large MTU"
 
 # Enable Large System Cache
 $cacheSettings = @(
@@ -316,11 +516,6 @@ foreach ($param in $smbParams) {
 }
 Write-Host "Optimize SMB Parameters"
 
-# Disable Memory Pressure Protection (MPP)
-Set-NetTCPSetting -MemoryPressureProtection Disabled
-Set-TCPSetting "EnableMPP" 0
-Write-Host "Disable Memory Pressure Protection (MPP)"
-
 # Disable NetBIOS Over TCP/IP
 Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\NetBT\Parameters\Interfaces" -Name "NetBiosOptions" -Value 2 -Type DWord
 (Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True").SetTcpipNetbios(2) | Out-Null
@@ -336,87 +531,10 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Delivery
 Set-Service -Name "DoSvc" -StartupType Manual
 Write-Host "Disable Delivery Optimization"
 
-# Enable Weak Host Model
-Get-NetIPInterface | Set-NetIPInterface -WeakHostReceive Enabled -WeakHostSend Enabled
-Write-Host "Enable Weak Host Model"
-
-# Disable NDIS Power Management
-Set-TCPSetting "DisablePowerManagement" 1
-Write-Host "Disable NDIS Power Management"
-
-# Disable Proportional Rate Reduction
-netsh int tcp set global prr=disabled | Out-Null
-Write-Host "Disable Proportional Rate Reduction"
-
-# Disable Connected Standby
-Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Power" -Name "EnforceDisconnectedStandby" -Value 0 -Type DWord
-powercfg /setacvalueindex scheme_current sub_none connectivityinstandby 0
-powercfg /s scheme_current
-Write-Host "Disable Connected Standby"
-
-# Disable Network Power Savings
-Disable-NetAdapterPowerManagement -Name * -NoRestart
-Write-Host "Disable Network Power Savings"
-
 # Disable Network Throttling
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" -Name "NonBestEffortLimit" -Value 0 -Type DWord
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" -Name "NetworkThrottlingIndex" -Value 4294967295 -Type DWord
 Write-Host "Disable Network Throttling"
-
-# Disable Network Adapter Power Saving
-$powerSettings = @(
-    # Disable Wake Features
-    @{Keyword="WakeOnMagicPacket"; Value="0"},
-    @{Keyword="WakeOnPattern"; Value="0"},
-    @{Keyword="WakeOnLink"; Value="0"},
-    @{Keyword="WakeOnLinkChange"; Value="0"},
-    @{Keyword="S5WakeOnLan"; Value="0"},
-    @{Keyword="WolShutdownLinkSpeed"; Value="2"},
-    @{Keyword="ModernStandbyWoLMagicPacket"; Value="0"},
-    @{Keyword="DeviceSleepOnDisconnect"; Value="0"},
-    # Disable Energy Efficient Ethernet
-    @{Keyword="EEE"; Value="0"},
-    @{Keyword="EEEPhyEnable"; Value="0"},
-    @{Keyword="EnableGreenEthernet"; Value="0"},
-    @{Keyword="EEELinkAdvertisement"; Value="0"},
-    @{Keyword="AdvancedEEE"; Value="0"},
-    # Disable Ultra Low Power Mode
-    @{Keyword="ULPMode"; Value="0"},
-    # Disable Wi-Fi capability that saves power consumption
-    @{Keyword="uAPSDSupport"; Value="0"},
-    # Disable Power Saving Features
-    @{Keyword="NicAutoPowerSaver"; Value="0"},
-    @{Keyword="SelectiveSuspend"; Value="0"},
-    @{Keyword="EnablePME"; Value="0"},
-    @{Keyword="ReduceSpeedOnPowerDown"; Value="0"},
-    @{Keyword="PowerSavingMode"; Value="0"},
-    @{Keyword="SavePowerNowEnabled"; Value="0"},
-    @{Keyword="GigaLite"; Value="0"},
-    @{Keyword="EnableSavePowerNow"; Value="0"},
-    @{Keyword="bLowPowerEnable"; Value="0"},
-    @{Keyword="EnablePowerManagement"; Value="0"},
-    @{Keyword="EnableDynamicPowerGating"; Value="0"},
-    @{Keyword="DisableDelayedPowerUp"; Value="1"},
-    @{Keyword="EnableConnectedPowerGating"; Value="0"},
-    @{Keyword="AutoPowerSaveModeEnabled"; Value="0"},
-    @{Keyword="PowerSaveMode"; Value="0"},
-    @{Keyword="AutoDisableGigabit"; Value="0"},
-    @{Keyword="PowerDownPll"; Value="0"},
-    @{Keyword="S5NicKeepOverrideMacAddrV2"; Value="0"},
-    @{Keyword="MIMOPowerSaveMode"; Value="3"},
-    @{Keyword="AlternateSemaphoreDelay"; Value="0"},
-    @{Keyword="SipsEnabled"; Value="0"},
-    # Enable Throughput Booster
-    @{Keyword="ThroughputBoosterEnabled"; Value="1"},
-    # Access Point Compatibility Mode: 'High Performance'
-    @{Keyword="ApCompatMode"; Value="0"},
-    # Disable network adapter power management
-    @{Keyword="PnPCapabilities"; Value="24"}
-)
-foreach ($setting in $powerSettings) {
-    Set-NICProperty $setting.Keyword $setting.Value
-}
-Write-Host "Disable Network Adapter Power Saving"
 
 # Increase Concurrent Connections Limit
 $conSettings = @(
@@ -428,22 +546,50 @@ foreach ($setting in $conSettings) {
 }
 Write-Host "Increase Concurrent Connections Limit"
 
+# Enable Path Maximum Transfer Unit (PMTU)
+Set-TCPSetting "EnablePMTUDiscovery" 1
+Write-Host "Enable Path Maximum Transfer Unit (PMTU)"
+
+# Enable Path Maximum Transfer Unit (PMTU) Black Hole Detection
+Set-TCPSetting "EnablePMTUBHDetect" 1
+Write-Host "Enable Path Maximum Transfer Unit (PMTU) Black Hole Detection"
+
+# Set Default TCP Window Size
+Set-TCPSetting "GlobalMaxTcpWindowSize" 65536
+Set-TCPSetting "TcpWindowSize" 65536
+Write-Host "Set Default TCP Window Size"
+
+# Disable NDIS Power Management
+Set-TCPSetting "DisablePowerManagement" 1
+Write-Host "Disable NDIS Power Management"
+
 # Remove TCP Connection Limit
 Set-TCPSetting "EnableConnectionRateLimiting" 0
 Write-Host "Disable TCP Connection Limit"
-
-# Set Dynamic Port Range to Maximum
-Set-NetTCPSetting -DynamicPortRangeStartPort 1024 -DynamicPortRangeNumberOfPort 64512
-Set-TCPSetting "MaxUserPort" 65534
-Write-Host "Set Dynamic Port Range to Maximum"
 
 # Unlimited Outstanding Send Packets
 Remove-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" -Name "MaxOutstandingSends" -ErrorAction SilentlyContinue
 Write-Host "Disable Outstanding Send Packets Limit"
 
-# Enable All Wireless Modes
-Set-NetAdapterAdvancedProperty -RegistryKeyword WirelessMode -RegistryValue 34 -NoRestart
-Set-NetAdapterAdvancedProperty -RegistryKeyword IEEE11nMode -RegistryValue 3 -NoRestart
+# Swuab Timeout Settings
+Set-TCPSetting "KeepAliveTime" 300000
+Set-TCPSetting "KeepAliveInterval" 1000
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters" -Name "MaxCacheTtl" -Value "86400" -Type DWord
+Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters" -Name "MaxNegativeCacheTtl" -Value "0" -Type DWord
+Write-Host "Swuab Timeout Settings"
+
+# Set Network Level Priorities
+$prioritySettings = @(
+    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="LocalPriority"; Value=4},
+    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="HostsPriority"; Value=5},
+    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="DnsPriority"; Value=6},
+    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="NetBtPriority"; Value=7},
+    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="Class"; Value=8}
+)
+foreach ($setting in $prioritySettings) {
+    Set-ItemProperty -Path $setting.Path -Name $setting.Name -Value $setting.Value -Type DWord
+}
+Write-Host "Set Network Level Priorities"
 
 # Optimize TCP Acks, Sacks, and Syns
 $networkInterfaces = Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
@@ -507,95 +653,27 @@ Write-Host "Disable RTT Resiliency for Non-SACK Clients"
 Set-TCPSetting "TcpTimedWaitDelay" 30
 Write-Host "Set TIME_WAIT Length to Minimum"
 
-# Swuab Timeout Settings
-Set-TCPSetting "KeepAliveTime" 300000
-Set-TCPSetting "KeepAliveInterval" 1000
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters" -Name "MaxCacheTtl" -Value "86400" -Type DWord
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters" -Name "MaxNegativeCacheTtl" -Value "0" -Type DWord
-Write-Host "Swuab Timeout Settings"
+<#
 
-# Enable Network Direct Memory Access (NetDMA)
-netsh int tcp set global netdma=enabled | Out-Null
-Set-TCPSetting "EnableTCPA" 1
-Write-Host "Enable NetDMA"
 
-# Enable Direct Cache Access (DCA)
-netsh int tcp set global dca=enabled | Out-Null
-Write-Host "Enable Direct Cache Access (DCA)"
+Miscellaneous
 
-# Enable TCP Fast Open
-netsh int tcp set global fastopen=enabled | Out-Null
-Write-Host "Enable TCP Fast Open"
 
-# Disable Flow Control
-if ($OptimizeFor -eq 1) {
-    Set-NICProperty "FlowControl" "3"
-    Write-Host "Enable Flow Control"
-} else {
-    Set-NICProperty "FlowControl" "0"
-    Write-Host "Disable Flow Control"
+#>
+
+# Disable Auto Configuration Logic on All Interfaces
+<# Disables Network Discovery
+Get-NetAdapter | ForEach-Object {
+    netsh wlan set autoconfig enabled=no interface="$($_.Name)" | Out-Null
 }
+Write-Host "Disable Auto Configuration Logic on All Interfaces"
+#>
 
-# Disable Interrupt Moderation
-if ($OptimizeFor -eq 1) {
-    Set-NICProperty "InterruptModeration" "1"
-    Write-Host "Enable Interrupt Moderation"
-} else {
-    Set-NICProperty "InterruptModeration" "0"
-    Write-Host "Disable Interrupt Moderation"
-}
-
-# Set Max Receive/Transmit Buffers
-if ($OptimizeFor -eq 1) {
-    $networkCards = Get-ChildItem "HKLM:\Software\Microsoft\Windows NT\CurrentVersion\NetworkCards" | 
-                    ForEach-Object { Get-ItemProperty $_.PSPath | Select-Object Description }
-
-    foreach ($card in $networkCards) {
-        $deviceClasses = Get-ChildItem "HKLM:\System\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}" -Recurse |
-                        Get-ItemProperty |
-                        Where-Object { $_.DriverDesc -eq $card.Description }
-
-        foreach ($device in $deviceClasses) {
-            $devicePath = $device.PSPath
-            
-            # ReceiveBuffers
-            $receiveBuffersPath = Join-Path $devicePath "Ndi\params\*ReceiveBuffers"
-            if (Test-Path $receiveBuffersPath) {
-                $maxValue = Get-ItemProperty $receiveBuffersPath -Name "Max" -ErrorAction SilentlyContinue
-                if ($maxValue) {
-                    Set-NICProperty "ReceiveBuffers" $maxValue.Max
-                }
-            }
-            
-            # TransmitBuffers
-            $transmitBuffersPath = Join-Path $devicePath "Ndi\params\*TransmitBuffers"
-            if (Test-Path $transmitBuffersPath) {
-                $maxValue = Get-ItemProperty $transmitBuffersPath -Name "Max" -ErrorAction SilentlyContinue
-                if ($maxValue) {
-                    Set-NICProperty "TransmitBuffers" $maxValue.Max
-                }
-            }
-        }
-    }
-    Write-Host "Set Max Receive/Transmit Buffers"
-} else {
-    Set-NICProperty "ReceiveBuffers" 128
-    Set-NICProperty "TransmitBuffers" 128
-    Write-Host "Disable Large Send Offload (LSO)"
-}
-
-# Set Network Level Priorities
-$prioritySettings = @(
-    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="LocalPriority"; Value=4},
-    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="HostsPriority"; Value=5},
-    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="DnsPriority"; Value=6},
-    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="NetBtPriority"; Value=7},
-    @{Path="HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider"; Name="Class"; Value=8}
-)
-foreach ($setting in $prioritySettings) {
-    Set-ItemProperty -Path $setting.Path -Name $setting.Name -Value $setting.Value -Type DWord
-}
-Write-Host "Set Network Level Priorities"
+# Disable Connected Standby
+Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Power" -Name "EnforceDisconnectedStandby" -Value 0 -Type DWord
+powercfg /setacvalueindex scheme_current sub_none connectivityinstandby 0
+powercfg /s scheme_current
+Write-Host "Disable Connected Standby"
 
 # Enable QoS
 Enable-NetAdapterBinding -Name * -ComponentID Ms_Pacer
