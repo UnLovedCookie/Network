@@ -11,17 +11,14 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
     $args = "-ExecutionPolicy Bypass -NoProfile -Command `"$script`""
 
-    if (Get-Command terminal.exe -ErrorAction SilentlyContinue) {
-        Start-Process terminal.exe -ArgumentList "$pwsh $args" -Verb RunAs
-    }
-    elseif (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
         Start-Process wt.exe -ArgumentList "$pwsh $args" -Verb RunAs
     }
     else {
         Start-Process $pwsh -ArgumentList $args -Verb RunAs
     }
 
-    break
+    exit
 }
 
 # Functions
@@ -72,7 +69,6 @@ function Set-TCPSetting {
   }
 }
 
-
 function Show-Menu {
   param([string]$Title,[object[]]$Options)  # "Label" or @("Label","Description")
   $i=0
@@ -98,6 +94,7 @@ $ConnectionType = Show-Menu "Connection Type:" @(
   @("VDSL (20-100 mbps)","Balanced speed & stability"),
   @("ADSL (<20 mbps)","For slower lines")
 )
+
 
 $OptimizeFor = Show-Menu "Optimize For:" @(
   @("Throughput (Higher Speeds)","Enable Packet Coalescing, LSO, & Throughput Booster; Normal AutoTuning; Max Rx/Tx Buffers"),
