@@ -4,34 +4,25 @@
 
 $ErrorActionPreference = "SilentlyContinue"
 
-# Relaunch elevated with newest 64-bit PowerShell then exit
-# Relaunch elevated with newest 64-bit PowerShell then exit
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # resolve current script path now (works in pwsh and Windows PowerShell)
-    $scriptPath = $PSCommandPath
-    if (-not $scriptPath) { $scriptPath = $MyInvocation.MyCommand.Path }
-    if (-not $scriptPath) { throw "Cannot determine script path. Save to a .ps1 file and run it." }
+# Elevated Script
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $script = if ($PSCommandPath) { "& `'$PSCommandPath`'" } else { "&([ScriptBlock]::Create((irm https://raw.githubusercontent.com/UnLovedCookie/Network/refs/heads/main/Network.ps1)))" };
+    $pwsh = if (Get-Command pwsh -ErrorAction SilentlyContinue) { "pwsh" } else { "powershell" }
 
-    # find newest 64-bit pwsh, else fallback to 64-bit Windows PowerShell
-    $pwsh = Get-ChildItem "$env:ProgramFiles\PowerShell\*\pwsh.exe" -ErrorAction Ignore |
-            Sort-Object VersionInfo.ProductVersion -Descending |
-            Select-Object -First 1 -Expand FullName
-    if (-not $pwsh) { $pwsh = "$env:WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" }
+    $args = "-ExecutionPolicy Bypass -NoProfile -Command `"$script`""
 
-    if (Get-Command wt.exe -ErrorAction Ignore) {
-        # run in Windows Terminal profile; pass a full command via -c
-        $inner = @(
-            'powershell.exe'
-            '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$scriptPath`""
-        ) + $args
-        Start-Process wt.exe -ArgumentList @('-p','Windows PowerShell','-c', ($inner -join ' ')) -Verb RunAs
-    } else {
-        # launch shell directly with proper argument array
-        Start-Process $pwsh -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', $scriptPath) + $args -Verb RunAs
+    if (Get-Command terminal.exe -ErrorAction SilentlyContinue) {
+        Start-Process terminal.exe -ArgumentList "$pwsh $args" -Verb RunAs
     }
-    exit
-}
+    elseif (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+        Start-Process wt.exe -ArgumentList "$pwsh $args" -Verb RunAs
+    }
+    else {
+        Start-Process $pwsh -ArgumentList $args -Verb RunAs
+    }
 
+    break
+}
 
 # Functions
 function Set-NICProperty {
@@ -753,4 +744,3 @@ if ($restart -eq 'y') {
 
 Write-Host "Network optimization complete! Press any key to exit."
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-
