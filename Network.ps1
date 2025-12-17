@@ -60,21 +60,9 @@ function Show-Menu {
 }
 
 # User Input
-$ConnectionType = Show-Menu "Connection Type:" @(
-  @("Fiber (100+ mbps)","Best for very high speeds"),
-  @("VDSL (20-100 mbps)","Balanced speed & stability"),
-  @("ADSL (<20 mbps)","For slower lines")
-)
-
-
-$OptimizeFor = Show-Menu "Optimize For:" @(
-  @("Throughput (Higher Speeds)","Enable Packet Coalescing, LSO, & Throughput Booster; Normal AutoTuning; Max Rx/Tx Buffers"),
-  @("Latency (Lower Ping)","Disable Packet Coalescing, LSO, & Throughput Booster; Highly Restricted AutoTuning; 128B Rx/Tx Buffers")
-)
-
-$Stability = Show-Menu "Stability:" @(
-  @("Stable Connection (No Lag Spikes)","Disable Interrupt Moderation, & Flow Control"),
-  @("Unstable Connection (Lag Spikes)","Enable Interrupt Moderation, & Flow Control")
+$OptimizeFor = Show-Menu "Choose an Option" @(
+  @("Throughput (Higher Speeds)","Enable Interrupt Moderation, Flow Control, Packet Coalescing, LSO, & Throughput Booster; Normal AutoTuning; Max Rx/Tx Buffers"),
+  @("Latency (Lower Ping)","Disable Interrupt Moderation, Flow Control, Packet Coalescing, LSO, & Throughput Booster; Highly Restricted AutoTuning; 128B Rx/Tx Buffers")
 )
 cls
 
@@ -100,12 +88,12 @@ if ($OptimizeFor -eq 1) {
 }
 
 # Flow Control
-if ($Stability -eq 1) {
-    Set-NICProperty "FlowControl" "0"
-    Write-Host "Disable Flow Control"
-} else {
+if ($OptimizeFor -eq 1) {
     Set-NICProperty "FlowControl" "3"
     Write-Host "Enable Flow Control"
+} else {
+    Set-NICProperty "FlowControl" "0"
+    Write-Host "Disable Flow Control"
 }
 
 # Packet Coalescing
@@ -120,12 +108,12 @@ if ($OptimizeFor -eq 1) {
 }
 
 # Interrupt Moderation
-if ($Stability -eq 1) {
-    Set-NICProperty "InterruptModeration" "0"
-    Write-Host "Disable Interrupt Moderation"
-} else {
+if ($OptimizeFor -eq 1) {
     Set-NICProperty "InterruptModeration" "1"
     Write-Host "Enable Interrupt Moderation"
+} else {
+    Set-NICProperty "InterruptModeration" "0"
+    Write-Host "Disable Interrupt Moderation"
 }
 
 # Large Send Offload (LSO)
@@ -343,14 +331,8 @@ foreach ($setting in $httpSettings) {
 Write-Host "Enable Winsock/HTTP Autotuning"
 
 # Optimize Time To Live (TTL)
-$DefaultTTL = switch ($ConnectionType) {
-    1 { 255 }
-    2 { 128 }
-    3 { 64 }
-    default { 128 }
-}
-Get-NetIPInterface | Set-NetIPInterface -CurrentHopLimit $DefaultTTL
-Write-Host "Set Time To Live (TTL) To $DefaultTTL"
+Get-NetIPInterface | Set-NetIPInterface -CurrentHopLimit 64
+Write-Host "Set Time To Live (TTL) To 64"
 
 # Disable Window Scaling Heuristics
 Set-NetTCPSetting -ScalingHeuristics Disabled
