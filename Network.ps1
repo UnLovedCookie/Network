@@ -25,49 +25,20 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 function Set-NICProperty {
     param($Keyword,$Value)
     Get-NetAdapterAdvancedProperty |
-      Where-Object { $_.RegistryKeyword -like "$Keyword*" -or $_.RegistryKeyword -like "*$Keyword" } |
-      ForEach-Object {
-          $need = [string]$Value
-          if ([string]$_.RegistryValue -eq $need) {
-              Write-Host "- $($_.Name) $($_.RegistryKeyword) already $need" -ForegroundColor Blue
-              return
-          }
-          try {
-              Set-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart -ErrorAction Stop
-              $now = [string](Get-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword $_.RegistryKeyword).RegistryValue
-              if ($now -eq $need) {
-                  Write-Host "* $($_.Name) $($_.RegistryKeyword) set to $need" -ForegroundColor Green
-              } else {
-                  Write-Host "X $($_.Name) $($_.RegistryKeyword) not set" -ForegroundColor Red
-              }
-          } catch {
-              Write-Host "X $($_.Name) $($_.RegistryKeyword) error: $($_.Exception.Message)" -ForegroundColor Red
-          }
-      }
+        Where-Object { $_.RegistryKeyword -like "$Keyword*" -or $_.RegistryKeyword -like "*$Keyword" } |
+        ForEach-Object { Set-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword $_.RegistryKeyword -RegistryValue $Value -NoRestart }
 }
 
 
 function Set-TCPSetting {
-  param([string]$Setting,[int]$Value)
-  $paths=@(
-    'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters',
-    'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters'
-  )
-  foreach($p in $paths){
-    try{$cur=Get-ItemPropertyValue -Path $p -Name $Setting -ErrorAction SilentlyContinue}catch{$cur=$null}
-    if($cur -eq $Value){Write-Host "- $p\$Setting already $Value" -ForegroundColor Blue;continue}
-    try{
-      New-ItemProperty -Path $p -Name $Setting -Value $Value -PropertyType DWord -Force|Out-Null
-      if((Get-ItemPropertyValue -Path $p -Name $Setting) -eq $Value){
-        Write-Host "* $p\$Setting set to $Value" -ForegroundColor Green
-      }else{
-        Write-Host "X $p\$Setting not set" -ForegroundColor Red
-      }
-    }catch{
-      Write-Host "X $p\$Setting error: $($_.Exception.Message)" -ForegroundColor Red
-    }
-  }
+    param([string]$Setting,[int]$Value)
+    $paths = @(
+        'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters',
+        'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters'
+    )
+    foreach ($p in $paths) { New-ItemProperty -Path $p -Name $Setting -Value $Value -PropertyType DWord -Force | Out-Null }
 }
+
 
 function Show-Menu {
   param([string]$Title,[object[]]$Options)  # "Label" or @("Label","Description")
@@ -139,13 +110,13 @@ if ($Stability -eq 1) {
 
 # Packet Coalescing
 if ($OptimizeFor -eq 1) {
-    Set-PacketCoalescingFilter Disabled
-    Set-NICProperty "Packet Coalescing" "0"
-    Write-Host "Disable Packet Coalescing"
-} else {
     Set-PacketCoalescingFilter Enabled
     Set-NICProperty "Packet Coalescing" "1"
     Write-Host "Enable Packet Coalescing"
+} else {
+    Set-PacketCoalescingFilter Disabled
+    Set-NICProperty "Packet Coalescing" "0"
+    Write-Host "Disable Packet Coalescing"
 }
 
 # Interrupt Moderation
@@ -410,8 +381,8 @@ Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\AFD\Parameters" 
 Write-Host "Set Fast Send Datagram To $MTU"
 
 # Increase Address Resolution Protocol (ARP) Cache Size To 4096
+Set-NetIPv4Protocol -NeighborCacheLimitEntries 4096 -ErrorAction SilentlyContinue
 Set-NetIPv6Protocol -NeighborCacheLimitEntries 4096
-Set-NetIPv4Protocol -NeighborCacheLimitEntries 4096
 Write-Host "Increase Address Resolution Protocol (ARP) Cache Size to 4096"
 
 # Enable Explicit Congestion Notification (ECN)
