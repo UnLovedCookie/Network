@@ -156,9 +156,9 @@ Write-Host "Disable TCP Chimney Offload"
 Set-NetOffloadGlobalSetting -TaskOffload Enabled
 Write-Host "Enable Network Task Offloading"
 
-# Enable Address Resolution Protocol (ARP) Offload
-Set-NICProperty "PMARPOffload" "1"
-Write-Host "Enable Address Resolution Protocol (ARP) Offload"
+# Disable Address Resolution Protocol (ARP) Offload
+Set-NICProperty "PMARPOffload" "0"
+Write-Host "Disable Address Resolution Protocol (ARP) Offload"
 
 # Disable IPsec Offload
 Disable-NetAdapterIPsecOffload -Name *
