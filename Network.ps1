@@ -160,6 +160,10 @@ Write-Host "Enable Network Task Offloading"
 Set-NICProperty "PMARPOffload" "0"
 Write-Host "Disable Address Resolution Protocol (ARP) Offload"
 
+# Disable Neighbor Solicitation (NS) Offload
+Set-NICProperty "PMNSOffload" "0"
+Write-Host "Disable Neighbor Solicitation (NS) Offload"
+
 # Disable IPsec Offload
 Disable-NetAdapterIPsecOffload -Name *
 Set-NICProperty "IPsecOffloadV1IPv4" "0"
