@@ -270,7 +270,7 @@ foreach ($setting in $powerSettings) {
 }
 Write-Host "Disable Network Adapter Power Saving Features"
 
-# Set Max Receive/Transmit Buffers
+# Set Receive/Transmit Buffers
 if ($OptimizeFor -eq 1) {
     foreach ($nic in Get-ChildItem 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\NetworkCards' | 
     ForEach-Object { (Get-ItemProperty $_.PSPath).Description }) {
@@ -294,6 +294,10 @@ if ($OptimizeFor -eq 1) {
     Set-NICProperty "TransmitBuffers" 128
     Write-Host "Set Receive/Transmit Buffers to 128"
 }
+
+# Set Roaming Aggressiveness to Lowest
+Set-NICProperty "Roaming Aggressiveness" 0
+Write-Host "Set Roaming Aggressiveness to Lowest"
 
 <#
 
